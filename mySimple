@@ -1,0 +1,103 @@
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/point-to-point-module.h"
+#include "ns3/ndnSIM-module.h"
+
+using namespace ns3;
+
+/**
+ * This scenario simulates a very simple network topology:
+ *
+ *
+ *      +----------+     1Mbps      +--------+     1Mbps      +----------+
+ *      | consumer | <------------> | router | <------------> | hijacker |
+ *      +----------+         10ms   +--------+          10ms  +----------+
+ *
+ *
+ * Consumer requests data from producer with frequency 10 interests per second
+ * (interests contain constantly increasing sequence number).
+ *
+ * For every received interest, producer replies with a data packet, containing
+ * 1024 bytes of virtual payload.
+ *
+ * To run scenario and see what is happening, use the following command:
+ *
+ *     ./waf --run=ndn-simple-with-pit-count-stats
+ */
+
+void
+PeriodicStatsPrinter (Ptr<Node> node, Time next)
+{
+
+
+   
+  ndn::pit::PitImpl<ndn::ndnSIM::serialized_policy_traits>::super::policy_container &policy =
+    DynamicCast< ndn::pit::PitImpl<ndn::ndnSIM::serialized_policy_traits> > (node->GetObject<ndn::Pit> ())->GetPolicy ();
+  uint32_t bytes = policy.get_current_space_used();
+
+  std::cout << "size used: "<<bytes<<std::endl;
+
+  Ptr<ndn::Pit> pit = node->GetObject<ndn::Pit> ();
+  std::cout << Simulator::Now ().ToDouble (Time::S) << "\t"
+            << node->GetId () << "\t"
+            << Names::FindName (node) << "\t"
+            << pit->GetSize () << "\n";
+  
+  Simulator::Schedule (next, PeriodicStatsPrinter, node, next);
+}
+
+int
+main (int argc, char *argv[])
+{
+  // setting default parameters for PointToPoint links and channels
+  Config::SetDefault ("ns3::PointToPointNetDevice::DataRate", StringValue ("1Mbps"));
+  Config::SetDefault ("ns3::PointToPointChannel::Delay", StringValue ("10ms"));
+  Config::SetDefault ("ns3::DropTailQueue::MaxPackets", StringValue ("20"));
+
+  // Read optional command-line parameters (e.g., enable visualizer with ./waf --run=<> --visualize
+  CommandLine cmd;
+  cmd.Parse (argc, argv);
+
+  // Creating nodes
+  NodeContainer nodes;
+  nodes.Create (3);
+
+  // Connecting nodes using two links
+  PointToPointHelper p2p;
+  p2p.Install (nodes.Get (0), nodes.Get (1));
+  p2p.Install (nodes.Get (1), nodes.Get (2));
+
+  // see more http://www.nsnam.org/doxygen/classns3_1_1_names.html
+  Names::Add ("consumer", nodes.Get (0));
+  Names::Add ("router",   nodes.Get (1));
+  Names::Add ("hijacker", nodes.Get (2));
+
+  // Install CCNx stack on all nodes
+  ndn::StackHelper ndnHelper;
+  ndnHelper.SetDefaultRoutes (true);
+  ndnHelper.SetPit ("ns3::ndn::pit::SerializedSize");
+  ndnHelper.InstallAll ();
+
+
+  Simulator::Schedule (Seconds (1), PeriodicStatsPrinter, nodes.Get (1), Seconds (1));
+
+  // Installing applications
+
+  // Consumer
+  ndn::AppHelper consumerHelper ("ns3::ndn::ConsumerCbr");
+  // Consumer will request /prefix/0, /prefix/1, ...
+  consumerHelper.SetPrefix ("/prefix");
+  consumerHelper.SetAttribute ("Frequency", StringValue ("10")); // 10 interests a second
+  consumerHelper.Install (nodes.Get (0)); // first node
+
+  // // Producer
+  ndn::AppHelper hijHelper ("Hijacker");
+  hijHelper.Install (nodes.Get (2)); // last node
+
+  Simulator::Stop (Seconds (20.0));
+
+  Simulator::Run ();
+  Simulator::Destroy ();
+
+  return 0;
+}
